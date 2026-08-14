@@ -22,8 +22,13 @@ export const PUBLIC_DIRS = ['js/', 'fonts/', 'icons/', 'app/'];
 /* Отдельные файлы в корне. `app/` здесь ради страницы-перенаправления, `dev-chat.html` —
    потому что служебный чат открывается с телефона по ссылке и без раздачи бесполезен;
    секретов в нём нет, вход закрыт паролем DEV_KEY (страж 133). */
+/* `.nojekyll` из списка убран намеренно (14.08). Две причины, обе проверены на живом
+   репозитории: веб-загрузчик GitHub молча не берёт файлы, начинающиеся с точки, — то есть
+   положить его через браузер всё равно нельзя; а пока его нет, Jekyll включён и прячет из
+   готового сайта папки на подчёркивании. Класть в архив файл, который не доедет и чьё
+   появление открыло бы `_supabase/`, значит держать в наборе взведённую мину. */
 export const PUBLIC_FILES = [
-  '.nojekyll', 'index.html', 'sw.js', 'dev-chat.html',
+  'index.html', 'sw.js', 'dev-chat.html',
   'manifest.json', 'manifest.ru.json', 'manifest.en.json',
   'manifest.es.json', 'manifest.pt.json', 'manifest.fr.json',
   'privacy.html', 'terms.html', 'LICENSE', 'CREDITS.txt', 'README.md',
