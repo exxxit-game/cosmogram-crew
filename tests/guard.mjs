@@ -5250,6 +5250,56 @@ async function guardBootFailureSpeaks(browser){
    серверные исходники, ни документы со списком незакрытых дыр. И обратное тоже: игра
    не должна оказаться неполной, иначе «безопасно» превратится в «не запускается».
    Список один и лежит в tests/relizy.mjs — правило в двух местах разъезжается. */
+/* 138. Партия 37 «Свернул — не потерял». Обещание игроку: если он свернул игру, забег
+   не гибнет за него, а если жизни всё-таки кончились — результат доезжает до таблицы,
+   а не исчезает вместе с занавесом. Две половины беды проверяются отдельно. */
+async function guardHidingDoesNotKillTheRun(browser){
+  const name = '138. Сворачивание не убивает забег, а смерть доходит до итогов';
+  let ctx;
+  try{
+    const o = await openGame(browser, { init:FRESH });
+    ctx = o.ctx;
+    const r = await o.page.evaluate(()=>{
+      if(typeof onHidden!=='function' || typeof startGame!=='function') return {missing:true};
+      runMode='classic'; startGame();
+      for(let f=0;f<120;f++) update(1/60);           // полминуты неба, чтобы было что терять
+      S.lives = 1;                                    // последняя жизнь — самый дорогой случай
+      const distDo = S.dist;
+      onHidden();                                     // игрок свернул
+      const posle = { paused:S.paused, pausing:S.pausing, ts:S.timeScale, dist:S.dist };
+      /* Возврат: цикл оживает. Мир под меню паузы двигаться не имеет права. */
+      if(typeof onShown==='function') onShown();
+      for(let f=0;f<40;f++) if(!S.paused) update(1/60); // как делает живой цикл: на паузе не считаем
+      const posleVozvrata = { dist:S.dist, lives:S.lives, dying:!!S.dying };
+
+      /* Вторая половина: занавес смерти нельзя переводить в паузу — иначе он замирает
+         навсегда и gameOver() не случается, а с ним не случается и запись рекорда. */
+      S.paused=false; S.pausing=1; S.dying=1; S.timeScale=.02;
+      const dt0 = S.dyingT||0;
+      for(let f=0;f<30;f++) if(!S.paused) update(1/60);
+      const zanaves = { paused:S.paused, pausing:S.pausing, ts:S.timeScale, shel:(S.dyingT||0)-dt0 };
+      return { distDo, posle, posleVozvrata, zanaves };
+    });
+    if(r.missing) return post(name,false,'нет onHidden или startGame — сценарий не тот');
+
+    if(!r.posle.paused) return post(name,false,
+      `после сворачивания S.paused=${r.posle.paused}, S.pausing=${r.posle.pausing}, timeScale=${r.posle.ts.toFixed(3)} — пауза не достигнута до остановки цикла, и разгон «Склейки» перенесётся на возврат: игрок вернётся в меню паузы, а мир под ним пролетит ещё полсекунды и врежется`);
+    const proletel = r.posleVozvrata.dist - r.distDo;
+    if(proletel > 1) return post(name,false, `после возврата мир пролетел ${proletel.toFixed(1)} мер под меню паузы`);
+    if(r.posleVozvrata.lives !== 1 || r.posleVozvrata.dying) return post(name,false,
+      `сворачивание стоило жизни: жизней ${r.posleVozvrata.lives}, занавес ${r.posleVozvrata.dying?'идёт':'нет'}`);
+    if(r.zanaves.paused) return post(name,false,
+      'занавес смерти переведён в паузу — он замрёт намертво, gameOver() не случится, и рекорд, кошелёк и статистика не запишутся');
+    if(r.zanaves.pausing) return post(name,false,
+      `начавшаяся смерть не отменила паузу: время мира зажато на ${r.zanaves.ts.toFixed(3)}, занавес ползёт в двадцать раз дольше положенного`);
+    /* dyingT — обратный отсчёт, он УБЫВАЕТ. Первая редакция стража ждала роста и краснела
+       на здоровом коде: прибор, а не игра. Проверяем, что счётчик сдвинулся вовсе. */
+    if(!(Math.abs(r.zanaves.shel)>0)) return post(name,false, `занавес не двигается: счётчик стоит на месте (${r.zanaves.shel})`);
+    return post(name,true,'пауза достигнута до остановки цикла, мир под меню не летит, занавес смерти паузой не прерывается');
+  }catch(e){ return post(name,false,'страж не отработал: '+e.message); }
+  finally{ if(ctx) await ctx.close().catch(()=>{}); }
+}
+
 async function guardOnlyGameGoesPublic(){
   const name = '137. Наружу уходит только игра — ни стенда, ни сервера, ни документов';
   try{
@@ -5393,7 +5443,7 @@ const GUARDS = [ guardNobodyAsksMissingScreen, guardTopIsShowcase, guardPortrait
                  guardScreensScrollByFinger, guardStickyBackHidesNothing, guardKeyboardDoesNotBreakScreen,
                  guardNoApiKeyInRepo,
                  guardStorageDeniedStillFlies, guardBootFailureSpeaks, guardSecondTabKeepsRecord,
-                 guardOnlyGameGoesPublic ];
+                 guardOnlyGameGoesPublic, guardHidingDoesNotKillTheRun ];
 
 const server = await serve();
 BASE = `http://127.0.0.1:${server.address().port}/index.html`;
