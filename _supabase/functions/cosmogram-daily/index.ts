@@ -229,11 +229,15 @@ Deno.serve(async (req: Request) => {
       .select('player_id, score, skin, track, players(first_name, username, share_ghost)')
       .eq('day', day).not('track', 'is', null)
       .order('score', { ascending: false }).limit(5);
-    const champ = (rows || []).find((r: any) => r.players?.share_ghost !== false); // скромника не показываем
+    const champ = (rows || []).find((r: any) => {
+      const owner = Array.isArray(r.players) ? r.players[0] : r.players;
+      return owner?.share_ghost !== false;
+    }); // скромника не показываем
     if (!champ) return json({ ok: false, reason: 'no_champion' });
+    const owner = Array.isArray(champ.players) ? champ.players[0] : champ.players;
     return json({ ok: true, champion: {
-      pid: champ.player_id, name: champ.players?.first_name || 'Игрок',
-      username: champ.players?.username || null, score: champ.score, skin: champ.skin,
+      pid: champ.player_id, name: owner?.first_name || 'Игрок',
+      username: owner?.username || null, score: champ.score, skin: champ.skin,
       track: champ.track, me: champ.player_id === pid } });
   }
 

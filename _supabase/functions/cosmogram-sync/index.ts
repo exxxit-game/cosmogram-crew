@@ -422,13 +422,45 @@ Deno.serve(async (req: Request) => {
 
   const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
   const { data: cfgRows } = await sb.from('config').select('key, value')
-    .in('key', ['bot_token', 'session_secret', 'discord_client_id', 'discord_client_secret', 'score_strict']);
+    .in('key', ['bot_token', 'session_secret', 'discord_client_id', 'discord_client_secret', 'score_strict', 'morning_report_token', 'morning_report_chat_id']);
   const cfg: Record<string, string> = {};
   for (const r of cfgRows || []) cfg[r.key] = r.value;
   if (!cfg.bot_token) return json({ error: 'not_configured' }, 503); // токен бота ещё не внесён
 
   let body: any;
   try { body = await req.json(); } catch { return json({ error: 'bad_json' }, 400); }
+
+  /* Morning report: internal scheduler action, deliberately before player auth.
+     The bearer token lives in config, never in the client or repository. */
+  if (body.action === 'morning_report') {
+    const expected = cfg.morning_report_token || '';
+    const auth = req.headers.get('authorization') || '';
+    const supplied = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+    if (!expected || !supplied || supplied !== expected) return json({ error: 'scheduler_auth' }, 401);
+    const chatId = Number(cfg.morning_report_chat_id || 0);
+    if (!isFinite(chatId) || chatId <= 0) return json({ error: 'report_not_configured' }, 503);
+
+    const countOf = async (table: string) => {
+      const { count } = await sb.from(table).select('*', { count: 'exact', head: true });
+      return count || 0;
+    };
+    const [players, scores, verified, days, daily] = await Promise.all([
+      countOf('players'), countOf('scores'),
+      sb.from('scores').select('player_id, category, best').eq('verified', true).order('best', { ascending: false }).limit(1),
+      countOf('player_days'), countOf('daily_runs'),
+    ]);
+    const leader = verified.data?.[0];
+    const date = new Date().toISOString().slice(0, 10);
+    const text = [
+      `☀️ Cosmogram — отчёт за ${date}`,
+      `Игроки: ${players}`,
+      `Рекорды: ${scores} · подтверждено: ${leader ? 'да' : 'нет'}`,
+      `Дневник: ${days} · Трасса дня: ${daily}`,
+      leader ? `Лучший подтверждённый: ${leader.best} (${leader.category})` : 'Подтверждённых рекордов пока нет',
+    ].join('\n');
+    const sent = await notifyBot(cfg.bot_token, chatId, text, '🚀 Открыть Cosmogram');
+    return json({ ok: sent === 'sent', sent, date, players, scores, days, daily });
+  }
 
   // Публичная конфигурация для клиента: client_id Discord публичен по своей природе (он в URL авторизации)
   if (body.action === 'public_config')
@@ -592,7 +624,8 @@ Deno.serve(async (req: Request) => {
         fd.append('title', 'Звезда Cosmogram');
         fd.append('stickers', JSON.stringify([{ sticker: 'attach://star', format: 'static', emoji_list: ['✨'] }]));
         fd.append('sticker_type', 'custom_emoji');
-        fd.append('star', new Blob([statusStarBytes()], { type: 'image/png' }), 'star.png');
+        const starBytes = statusStarBytes();
+        fd.append('star', new Blob([starBytes.buffer as ArrayBuffer], { type: 'image/png' }), 'star.png');
         const cr = await fetch('https://api.telegram.org/bot' + cfg.bot_token + '/createNewStickerSet', { method: 'POST', body: fd });
         const ca = await cr.json();
         if (!ca.ok) return json({ error: 'tg_stickerset', detail: ca.description || ('tg_' + cr.status) }, 502);
@@ -852,9 +885,10 @@ Deno.serve(async (req: Request) => {
     const { data: g } = await sb.from('ghosts')
       .select('track, skin, best, seed, players(first_name, username, share_ghost)')
       .eq('player_id', pp).eq('category', cat).maybeSingle();
-    if (!g || g.players?.share_ghost === false) return json({ ok: false, reason: 'no_ghost' });
+    const owner = Array.isArray(g?.players) ? g.players[0] : g?.players;
+    if (!g || owner?.share_ghost === false) return json({ ok: false, reason: 'no_ghost' });
     return json({ ok: true, track: g.track, skin: g.skin, best: g.best, seed: g.seed,
-      name: g.players?.first_name || 'Игрок', username: g.players?.username || null });
+      name: owner?.first_name || 'Игрок', username: owner?.username || null });
   }
 
   if (body.action === 'ghost_share') {
